@@ -1,0 +1,10 @@
+streamlit
+joblib
+gensim
+deep-translator
+numpy
+pandas
+requests
+openpyxl
+gdown
+scikit-learn==1.6.1
