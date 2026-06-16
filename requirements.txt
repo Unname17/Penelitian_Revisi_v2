@@ -1,8 +1,8 @@
 streamlit
 joblib
-gensim>=4.3.0
+gensim==4.4.0
 deep-translator
-numpy
+numpy<2.0.0
 pandas
 requests
 openpyxl
