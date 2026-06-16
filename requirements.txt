@@ -1,6 +1,6 @@
 streamlit
 joblib
-gensim
+gensim>=4.3.0
 deep-translator
 numpy
 pandas
