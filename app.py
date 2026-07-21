@@ -89,12 +89,12 @@ def normalize_text(text):
     return " ".join(normalized_words)
 
 aspect_names = {
-    0: "Kelembagaan & Aktor Pendidikan",
-    1: "Beban & Kualitas Pendidikan",
-    2: "Status Kontrak & Non-ASN",
-    3: "Anggaran & Kebijakan Kesejahteraan",
-    4: "Status Kepegawaian & Legalitas",
-    5: "Kualifikasi Akademik & Kebijakan Sosial",
+    0: "Institutional & Educational Actors",
+    1: "Educational Load & Quality",
+    2: "Contract & Non-ASN Status",
+    3: "Budget & Welfare Policy",
+    4: "Employment Status & Legality",
+    5: "Academic Qualification & Social Policy",
 }
 
 # --- 4. CSS KUSTOM (RESPONSIVE) ---
@@ -241,8 +241,7 @@ if btn_analisis:
             aspek = "Tidak Terdeteksi"
         
         # SVM Klasifikasi (Teks Gabungan)
-        combined_text = aspek + " " + translated
-        tfidf = tfidf_vectorizer.transform([combined_text])
+        tfidf = tfidf_vectorizer.transform([translated])
         
         feature_names = tfidf_vectorizer.get_feature_names_out()
         nonzero_idx = tfidf.nonzero()[1]
@@ -332,8 +331,11 @@ if btn_analisis:
             st.code(text_normalized, language="text")
             st.markdown("**Teks Terjemahan (Inggris):**")
             st.code(translated, language="text")
-            st.markdown("**Teks Gabungan (Aspek + Terjemahan) yang masuk ke TF-IDF:**")
-            st.code(combined_text, language="text")
+            st.markdown("**Teks Normalisasi & Pembersihan:**")
+            st.code(text_normalized, language="text")
+            
+            st.markdown("**Teks Terjemahan (Masuk ke TF-IDF):**")
+            st.code(translated, language="text")
             st.markdown("**Term yang dikenali TF-IDF vectorizer:**")
             st.write(f"Jumlah term yang match: {len(matched_terms)}")
             st.write(matched_terms)
