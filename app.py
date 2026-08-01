@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import requests
 from io import BytesIO
+import re
 
 # --- 1. KONFIGURASI HALAMAN (HARUS DI ATAS) ---
 # layout="centered" memastikan tampilan proporsional di tengah untuk PC, dan full-width di HP
@@ -15,58 +16,166 @@ st.set_page_config(page_title="Analisis Dosen", layout="centered", initial_sideb
 # =========================================================================
 # 2. LOAD MODEL & RESOURCES
 # =========================================================================
-@st.cache_resource(ttl=600)  # cache akan disegarkan setiap 10 menit
+@st.cache_resource(ttl=600)
 def load_resources():
     svm_model = joblib.load('svm_model.pkl')
     tfidf_vectorizer = joblib.load('tfidf_vectorizer.pkl')
     lda_model = LdaModel.load('lda_model.model')
     lda_dict = Dictionary.load('lda_dictionary.dict')
 
+    # Kamus kata tidak baku -> baku (dipakai HANYA di tahap normalisasi, SEBELUM translate)
     url = "https://github.com/analysisdatasentiment/kamus_kata_baku/raw/main/kamuskatabaku.xlsx"
     response = requests.get(url)
     kamus_data = pd.read_excel(BytesIO(response.content))
-    
-    kamus_norm = dict(zip(
-        kamus_data.iloc[:, 0].astype(str).str.lower(),
-        kamus_data.iloc[:, 1].astype(str)
+    kamus_tidak_baku = dict(zip(
+        kamus_data['tidak_baku'].astype(str).str.lower(),
+        kamus_data['kata_baku'].astype(str)
     ))
 
-    kamus_pribadi = {
-        'lecturers': 'lecturer', 'professor': 'lecturer', 'professors': 'lecturer',
-        'prof': 'lecturer', 'tutor': 'lecturer', 'tutors': 'lecturer',
-        'instructor': 'lecturer', 'instructors': 'lecturer', 'educator': 'lecturer',
-        'educators': 'lecturer', 'academic': 'lecturer', 'academics': 'lecturer',
-        'academician': 'lecturer', 'faculty': 'lecturer', 'faculties': 'lecturer',
-        'teacher': 'lecturer', 'teachers': 'lecturer', 'lecturing': 'lecturer',
-        
-        'salaries': 'salary', 'wage': 'salary', 'wages': 'salary',
-        'income': 'salary', 'incomes': 'salary', 'pay': 'salary',
-        'paid': 'salary', 'paying': 'salary', 'paycheck': 'salary',
-        'fee': 'salary', 'honorarium': 'salary', 'honorariums': 'salary',
-        'honorary': 'salary', 'honor': 'salary', 'remuneration': 'salary',
-        'compensation': 'salary', 'allowance': 'salary', 'allowances': 'salary',
-        'stipend': 'salary', 'tukin': 'salary', 'bonus': 'salary',
-        'bonuses': 'salary', 'reward': 'salary', 'rewards': 'salary',
-        'pension': 'salary', 'pensions': 'salary',
-        'prosperity': 'welfare', 'livelihood': 'welfare',
+    return svm_model, tfidf_vectorizer, lda_model, lda_dict, kamus_tidak_baku
 
-        'university': 'institution', 'universities': 'institution', 'college': 'institution',
-        'colleges': 'institution', 'campus': 'institution', 'campuses': 'institution',
-        'school': 'institution', 'schools': 'institution', 'institutions': 'institution',
+svm_model, tfidf_vectorizer, lda_model, lda_dict, kamus_tidak_baku = load_resources()
 
-        'application': 'system', 'app': 'system', 'apps': 'system', 'platform': 'system',
-        'systems': 'system', 'sister': 'system', 'siakad': 'system', 'sinta': 'system',
-        'bkd': 'system', 'dapodik': 'system', 'feeder': 'system',
-        'pppk': 'status', 'pns': 'status', 'asn': 'status',
-        'tenure': 'status', 'tenured': 'status',
-        'gw': 'saya', 'ga': 'tidak', 'keknya': 'sepertinya', 
-        'udh': 'sudah', 'gausa': 'tidak usah', 'jdi': 'jadi', 
-        'nder': '' 
-    }
-    kamus_norm.update(kamus_pribadi)
-    return svm_model, tfidf_vectorizer, lda_model, lda_dict, kamus_norm
 
-svm_model, tfidf_vectorizer, lda_model, lda_dict, kamus_norm = load_resources()
+# --- Tahap 1: Cleaning (Cell 15) ---
+def clean_text(text):
+    if text is None or not isinstance(text, str):
+        return ""
+    text = re.sub(r'\n+', ' ', text)
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)
+    text = re.sub(r'@[^\s]+', '', text)
+    text = re.sub(r'\brt\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<.*?>', '', text)
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F" u"\U0001F300-\U0001F5FF" u"\U0001F680-\U0001F6FF"
+        u"\U0001F700-\U0001F77F" u"\U0001F780-\U0001F7FF" u"\U0001F800-\U0001F8FF"
+        u"\U0001F900-\U0001F9FF" u"\U0001FA00-\U0001FA6F" u"\U0001FA70-\U0001FAFF"
+        u"\U0001F004-\U0001F0CF" "]+", flags=re.UNICODE)
+    text = emoji_pattern.sub(r'', text)
+    text = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
+    text = re.sub(r'\b\d+\b', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+# --- Tahap 2: Normalisasi kata tidak baku (Cell 19) ---
+def normalisasi_baku(text, kamus_tidak_baku):
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    tokens = text.split()
+    blacklist_nama = {'mutia', 'prof', 'harjo', 'dekan', 'mbak'}
+    replaced_words = []
+    for token in tokens:
+        token_lower = token.lower()
+        if len(token_lower) <= 1 or token_lower.isdigit():
+            continue
+        if token_lower in blacklist_nama:
+            continue
+        if token_lower in kamus_tidak_baku:
+            baku_word = kamus_tidak_baku[token_lower]
+            replaced_words.append(baku_word if isinstance(baku_word, str) else token)
+        else:
+            replaced_words.append(token)
+    return ' '.join(replaced_words)
+
+# --- Tahap 3: Pre-translate normalization (Cell 21, Lapis 1) ---
+def pre_translate_normalization(text):
+    if not isinstance(text, str):
+        return ""
+    text = re.sub(r'\bs1s2\b', 'bachelor and master degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs2s3\b', 'master and doctoral degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs1\b', 'bachelor degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs2\b', 'master degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs3\b', 'doctoral degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bsd\b', 'institution', text, flags=re.IGNORECASE)
+    return text
+
+# --- Tahap 4: Post-translate cleaning (Cell 21, Lapis 2) ---
+def post_translate_cleaning(text):
+    if not isinstance(text, str):
+        return ""
+    text = re.sub(r'\bdosen\b', 'lecturer', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bgaji\b', 'salary', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bahli\b', 'expert', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bbayar\b', 'salary', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bdpr\b', 'government', text, flags=re.IGNORECASE)
+    text = re.sub(r'([^0-9A-Za-z \t])|(\w+:\/\/\S+)', ' ', text)
+    text = text.lower()
+    text = re.sub(r'\b s \b', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+# --- Tahap 5: Synonym mapping Inggris (Cell 23) ---
+synonym_mapping = {
+    'lecturers': 'lecturer', 'professor': 'lecturer', 'professors': 'lecturer',
+    'prof': 'lecturer', 'tutor': 'lecturer', 'tutors': 'lecturer',
+    'instructor': 'lecturer', 'instructors': 'lecturer', 'educator': 'lecturer',
+    'educators': 'lecturer', 'academic': 'lecturer', 'academics': 'lecturer',
+    'academician': 'lecturer', 'faculty': 'lecturer', 'faculties': 'lecturer',
+    'teacher': 'lecturer', 'teachers': 'lecturer', 'lecturing': 'lecturer',
+    'salaries': 'salary', 'wage': 'salary', 'wages': 'salary',
+    'income': 'salary', 'incomes': 'salary', 'pay': 'salary',
+    'paid': 'salary', 'paying': 'salary', 'paycheck': 'salary',
+    'fee': 'salary', 'honorarium': 'salary', 'honorariums': 'salary',
+    'honorary': 'salary', 'honor': 'salary', 'remuneration': 'salary',
+    'compensation': 'salary', 'allowance': 'salary', 'allowances': 'salary',
+    'stipend': 'salary', 'tukin': 'salary', 'bonus': 'salary',
+    'bonuses': 'salary', 'reward': 'salary', 'rewards': 'salary',
+    'pension': 'salary', 'pensions': 'salary',
+    'prosperity': 'welfare', 'livelihood': 'welfare',
+    'university': 'institution', 'universities': 'institution', 'college': 'institution',
+    'colleges': 'institution', 'campus': 'institution', 'campuses': 'institution',
+    'school': 'institution', 'schools': 'institution', 'institutions': 'institution',
+    'application': 'system', 'app': 'system', 'apps': 'system', 'platform': 'system',
+    'systems': 'system', 'sister': 'system', 'siakad': 'system', 'sinta': 'system',
+    'bkd': 'system', 'dapodik': 'system', 'feeder': 'system',
+    'pppk': 'status', 'pns': 'status', 'asn': 'status',
+    'tenure': 'status', 'tenured': 'status'
+}
+
+def apply_synonyms(text, synonym_dict):
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    text = re.sub(r'\bcivil servant\b', 'status', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bcivil servants\b', 'status', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bnon asn\b', 'status', text, flags=re.IGNORECASE)
+    words = text.split()
+    replaced = [synonym_dict[w.lower()] if w.lower() in synonym_dict else w for w in words]
+    return ' '.join(replaced)
+
+# --- Tahap 6: Stopword removal (Cell 25) ---
+import nltk
+from nltk.corpus import stopwords
+nltk.download('stopwords', quiet=True)
+
+stop_words_id = set(stopwords.words('indonesian'))
+stop_words_en = set(stopwords.words('english'))
+custom_blacklist = {
+    'even', 'also', 'like', 'really', 'get', 'got', 'would', 'could',
+    'make', 'made', 'one', 'two', 'go', 'going', 'say', 'said', 'want',
+    'know', 'think', 'well', 'much', 'many', 'way', 'something', 'anything',
+    'people', 'still', 'though', 'become', 'yes', 'small', 'year', 'state',
+    'first', 'good', 'right', 'take', 'must', 'per', 'sir', 'sis', 'lowk',
+    'kalau', 'kita', 'untuk', 'saja', 'ke', 'nya', 'yg', 'aja',
+    'kalo', 'buat', 'dekan', 'mbak', 'ibu', 'pak', 'tapi',
+    'yang', 'di', 'ini', 'itu', 'juga', 'kan', 'bagaimana', 'dan', 'harus', 'lagi',
+    'sudah', 'dari', 'sama', 'bisa', 'memang', 'dulu', 'bu', 'saya', 'ada',
+    'iya', 'begitu', 'terima', 'cuma', 'segini', 'karena', 'baik'
+}
+negation_words = {
+    'tidak', 'bukan', 'belum', 'jangan', 'tak', 'gak', 'enggak', 'ga', 'kurang',
+    'no', 'not', 'nor', 'neither', 'never', 'cannot', 'cant', 'dont', 'doesnt',
+    'didnt', 'isnt', 'arent', 'wasnt', 'werent', 'hasnt', 'havent', 'hadnt',
+    'wouldnt', 'couldnt', 'shouldnt', 'wont', 'aint'
+}
+all_stopwords = stop_words_id.union(custom_blacklist).union(stop_words_en)
+final_blacklist = all_stopwords - negation_words
+
+def remove_stopwords(text):
+    if not isinstance(text, str):
+        return ""
+    words = text.split()
+    filtered = [w.lower() for w in words if len(w.lower()) > 1 and not w.lower().isdigit() and w.lower() not in final_blacklist]
+    return " ".join(filtered)
 
 # =========================================================================
 # VALIDASI 
@@ -83,10 +192,7 @@ if len(model_classes) != 2:
 # =========================================================================
 # 3. FUNGSI & MAPPING
 # =========================================================================
-def normalize_text(text):
-    words = text.lower().split()
-    normalized_words = [kamus_norm.get(w, w) for w in words]
-    return " ".join(normalized_words)
+
 
 aspect_names = {
     0: "Institutional & Educational Actors",
@@ -218,19 +324,36 @@ if btn_analisis:
     if user_input.strip() == "":
         st.warning("⚠️ Masukkan teks aspirasi terlebih dahulu.")
     else:
-        # Normalisasi & Translasi
-        text_normalized = normalize_text(user_input)
+        # Tahap 1-2: cleaning + case folding
+        step1_clean = clean_text(user_input).lower()
+
+        # Tahap 3: normalisasi kata tidak baku
+        step2_normalisasi = normalisasi_baku(step1_clean, kamus_tidak_baku)
+
+        # Tahap 4: pre-translate normalization
+        step3_pretranslate = pre_translate_normalization(step2_normalisasi)
+
+        # Tahap 5: translate ke Inggris
         try:
-            translated = GoogleTranslator(source='id', target='en').translate(text_normalized)
+            translated_raw = GoogleTranslator(source='id', target='en').translate(step3_pretranslate)
         except Exception as e:
             st.error(f"❌ Gagal menerjemahkan teks: {e}")
             st.stop()
-        
-        # LDA Topik
-        tokens = translated.lower().split()
+
+        # Tahap 6: post-translate cleaning
+        step4_posttranslate = post_translate_cleaning(translated_raw)
+
+        # Tahap 7: synonym mapping Inggris
+        step5_synonym = apply_synonyms(step4_posttranslate, synonym_mapping)
+
+        # Tahap 8: stopword removal (INI TEKS FINAL yang identik dengan training)
+        final_text = remove_stopwords(step5_synonym)
+
+        # ==== LDA Topik — pakai final_text, bukan translated mentah ====
+        tokens = final_text.split()
         bow = lda_dict.doc2bow(tokens)
         topics = lda_model.get_document_topics(bow)
-        
+
         if topics and len(topics) > 0:
             try:
                 best_topic = max(topics, key=lambda x: x[1])[0]
@@ -239,14 +362,13 @@ if btn_analisis:
                 aspek = "Tidak Terdeteksi"
         else:
             aspek = "Tidak Terdeteksi"
-        
-        # SVM Klasifikasi (Teks Gabungan)
-        tfidf = tfidf_vectorizer.transform([translated])
-        
+
+        # ==== SVM Klasifikasi — pakai final_text ====
+        tfidf = tfidf_vectorizer.transform([final_text])
+
         feature_names = tfidf_vectorizer.get_feature_names_out()
         nonzero_idx = tfidf.nonzero()[1]
         matched_terms = [feature_names[i] for i in nonzero_idx]
-
         prediksi_label = svm_model.predict(tfidf)[0]
         
         # Kalkulasi Confidence
@@ -318,7 +440,7 @@ if btn_analisis:
                     AI Confidence Score
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <div style="font-weight: 700; color: #111827; font-size: 14px;">{accuracy}% Accuracy</div>
+                    <div style="font-weight: 700; color: #111827; font-size: 14px;">{accuracy}% yakin</div>
                     <div style="width: 40px; height: 3px; background-color: #111827; border-radius: 2px;"></div>
                 </div>
             </div>
@@ -328,14 +450,14 @@ if btn_analisis:
         st.markdown("<br>", unsafe_allow_html=True)
         with st.expander("📖 Lihat Detail Proses Analisis Model AI"):
             st.markdown("**Teks Normalisasi:**")
-            st.code(text_normalized, language="text")
+            st.code(step2_normalisasi, language="text")
             st.markdown("**Teks Terjemahan (Inggris):**")
-            st.code(translated, language="text")
+            st.code(translated_raw, language="text")
             st.markdown("**Teks Normalisasi & Pembersihan:**")
-            st.code(text_normalized, language="text")
+            st.code(step2_normalisasi, language="text")
             
             st.markdown("**Teks Terjemahan (Masuk ke TF-IDF):**")
-            st.code(translated, language="text")
+            st.code(translated_raw, language="text")
             st.markdown("**Term yang dikenali TF-IDF vectorizer:**")
             st.write(f"Jumlah term yang match: {len(matched_terms)}")
             st.write(matched_terms)
