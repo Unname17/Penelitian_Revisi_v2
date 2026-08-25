@@ -2,7 +2,8 @@ import streamlit as st
 import joblib
 from gensim.models import LdaModel
 from gensim.corpora import Dictionary
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
+import time
 import numpy as np
 import pandas as pd
 import requests
@@ -177,6 +178,29 @@ def remove_stopwords(text):
     filtered = [w.lower() for w in words if len(w.lower()) > 1 and not w.lower().isdigit() and w.lower() not in final_blacklist]
     return " ".join(filtered)
 
+def terjemahkan_aman(text):
+    if not isinstance(text, str) or not text.strip(): 
+        return ""
+    
+    try:
+        # Percobaan 1: Google Translator
+        hasil = GoogleTranslator(source='id', target='en').translate(text)
+        time.sleep(0.5)
+        return hasil
+    except Exception as e_google:
+        # Menampilkan notifikasi visual di Streamlit jika Google gagal
+        st.toast("⚠️ Google Translate limit/ditangguhkan. Beralih ke MyMemory...", icon="🔄")
+        
+        try:
+            # Percobaan 2: MyMemory Translator
+            hasil = MyMemoryTranslator(source='id-ID', target='en-US').translate(text)
+            time.sleep(0.5)
+            return hasil
+        except Exception:
+            st.toast("⚠️ kedua library lagi ditangguhkan jadi di balikkan lagi dengan teks asli", icon="🔄")
+            # Jika keduanya gagal
+            return text
+
 
 # =========================================================================
 # VALIDASI MODEL
@@ -283,11 +307,11 @@ if pilihan_menu == "💬 Analisis Teks":
                 step2_normalisasi = normalisasi_baku(step1_clean, kamus_tidak_baku)
                 step3_pretranslate = pre_translate_normalization(step2_normalisasi)
                 
-                try:
-                    translated_raw = GoogleTranslator(source='id', target='en').translate(step3_pretranslate)
-                except Exception as e:
-                    st.error(f"❌ Gagal menerjemahkan teks: {e}")
-                    st.stop()
+                translated_raw = terjemahkan_aman(step3_pretranslate)
+                
+                # Opsional: Memberi tahu pengguna jika kedua API gagal dan teks dikembalikan ke bentuk asli
+                if translated_raw == step3_pretranslate and step3_pretranslate.strip() != "":
+                    st.warning("⚠️ Server terjemahan sedang penuh. Memproses dengan teks asli, akurasi AI mungkin sedikit menurun.")
 
                 step4_posttranslate = post_translate_cleaning(translated_raw)
                 step5_synonym = apply_synonyms(step4_posttranslate, synonym_mapping)
@@ -445,7 +469,7 @@ elif pilihan_menu == "🪟 Analisis Batch":
                             step1_clean = clean_text(teks_asli).lower()
                             step2_normalisasi = normalisasi_baku(step1_clean, kamus_tidak_baku)
                             step3_pretranslate = pre_translate_normalization(step2_normalisasi)
-                            translated_raw = GoogleTranslator(source='id', target='en').translate(step3_pretranslate)
+                            translated_raw = terjemahkan_aman(step3_pretranslate)
                             step4_posttranslate = post_translate_cleaning(translated_raw)
                             step5_synonym = apply_synonyms(step4_posttranslate, synonym_mapping)
                             final_text = remove_stopwords(step5_synonym)
