@@ -1,2 +1,246 @@
 python-3.12
 git add requirements.txt runtime.txt
+
+
+seperti ini dia saat saya upload text batchnya
+⚠️ Google limit/ditangguhkan. Beralih ke MyMemory...
+
+⚠️❌ Semua API lumpuh. Memproses menggunakan teks asli.
+
+🔄⚠️ MyMemory limit. Beralih ke Bing Translator...
+
+🔄⚠️ Google limit/ditangguhkan. Beralih ke MyMemory...
+
+⚠️❌ Semua API lumpuh. Memproses menggunakan teks asli.
+
+🔄⚠️ MyMemory limit. Beralih ke Bing Translator...
+
+🔄⚠️ Google limit/ditangguhkan. Beralih ke MyMemory...
+
+⚠️
+bisa tambahkan time sleep seperti kode ini agar tida tidak maksa translatenya dan dilakukan secara perlahan lahan
+import pandas as pd
+import re
+import time
+import textwrap
+import json
+import os
+from deep_translator import GoogleTranslator, MyMemoryTranslator
+import random # Tambahkan ini di bagian paling atas (tempat import)
+import translators as ts
+import random
+
+# =========================================================================
+# 1. PRE-TRANSLATE NORMALIZATION (Lapis 1)
+# =========================================================================
+def pre_translate_normalization(text):
+    if not isinstance(text, str):
+        return ""
+    # Mengamankan singkatan gelar dan institusi agar tidak salah terjemah
+    text = re.sub(r'\bs1s2\b', 'bachelor and master degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs2s3\b', 'master and doctoral degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs1\b', 'bachelor degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs2\b', 'master degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bs3\b', 'doctoral degree', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bsd\b', 'institution', text, flags=re.IGNORECASE)
+    return text
+
+# Menerapkan Lapis 1
+df['normalisasi_fixed'] = df['normalisasi'].apply(pre_translate_normalization)
+
+# =========================================================================
+# 2. IDENTIFIKASI BAHASA & ISOLASI KALIMAT UNIK
+# =========================================================================
+df_normalisasi = pd.DataFrame(df['normalisasi_fixed'].astype(str))
+unique_elements = df_normalisasi['normalisasi_fixed'].unique()
+
+print(f"Menemukan {len(unique_elements)} kalimat unik dari total {len(df_normalisasi)} baris data.")
+
+# =========================================================================
+# 3. PROSES PENERJEMAHAN DENGAN AUTO-SAVE & CHECKPOINT
+# =========================================================================
+checkpoint_file = 'checkpoint_terjemahan.json'
+translations = {}
+
+# [FITUR BARU] Cek apakah ada file save-an sebelumnya
+if os.path.exists(checkpoint_file):
+    with open(checkpoint_file, 'r', encoding='utf-8') as f:
+        translations = json.load(f)
+    print(f"✓ Berhasil memuat {len(translations)} kalimat yang sudah diterjemahkan sebelumnya.")
+    print("✓ Melanjutkan sisa kalimat yang belum diterjemahkan...\n")
+else:
+    print("Memulai proses penerjemahan dari awal (CHUNKING & AUTO-SAVE AKTIF)...\n")
+
+# def safe_translate(text, max_retries=3):
+#     chunks = textwrap.wrap(text, width=2000, break_long_words=False)
+#     translated_chunks = []
+
+#     for chunk in chunks:
+#         success = False
+#         wait_time = 3 
+
+#         for attempt in range(max_retries):
+#             try:
+#                 time.sleep(2) # Jeda aman 2 detik
+#                 # res = GoogleTranslator(source='id', target='en').translate(chunk)
+#                 res = MyMemoryTranslator(source='id', target='en').translate(chunk)
+#                 translated_chunks.append(res)
+#                 success = True
+#                 break
+#             except Exception as e:
+#                 print(f"    -> API Sibuk. Menunggu {wait_time} detik... (Percobaan {attempt+1}/{max_retries})")
+#                 time.sleep(wait_time)
+#                 wait_time *= 2 
+
+#         if not success:
+#             # [PENTING] Jika gagal total, kembalikan None agar proses bisa dihentikan paksa
+#             return None
+
+#     return " ".join(translated_chunks)
+# def safe_translate(text, max_retries=3):
+#     # 1. UBAH width MENJADI 490 KARENA MYMEMORY MAKSIMAL 500 KARAKTER
+#     chunks = textwrap.wrap(text, width=490, break_long_words=False)
+#     translated_chunks = []
+
+#     for chunk in chunks:
+#         success = False
+#         wait_time = 3 
+
+#         for attempt in range(max_retries):
+#             try:
+#                 time.sleep(random.uniform(8.0, 15.0)) # Jeda 8 sampai 15 detik per kalimat
+                
+#                 # 2. MASUKKAN EMAIL UNTUK MEMBUKA KUOTA 50.000 KATA/HARI
+#                 res = MyMemoryTranslator(source='indonesian', target='english', email='muhajirkelana48@gmail.com').translate(chunk)
+                
+#                 translated_chunks.append(res)
+#                 success = True
+#                 break
+#             except Exception as e:
+#                 # 3. MENCETAK ERROR ASLI AGAR KITA TAHU PENYEBABNYA JIKA GAGAL LAGI
+#                 print(f"    -> Error: {e} | Menunggu {wait_time} detik... (Percobaan {attempt+1}/{max_retries})")
+#                 time.sleep(wait_time)
+#                 wait_time *= 2 
+
+#         if not success:
+#             # Jika gagal total, kembalikan None agar proses bisa dihentikan paksa
+#             return None
+
+#     return " ".join(translated_chunks)
+
+def safe_translate(text, max_retries=3):
+    # Bing cukup kuat menampung hingga 1000 karakter per request
+    chunks = textwrap.wrap(text, width=1000, break_long_words=False)
+    translated_chunks = []
+
+    for chunk in chunks:
+        success = False
+        wait_time = 3 
+
+        for attempt in range(max_retries):
+            try:
+                # Jeda acak 2.5 hingga 4.5 detik agar terlihat seperti manusia
+                time.sleep(random.uniform(2.5, 4.5)) 
+                
+                # MENGGUNAKAN MESIN BING
+                res = ts.translate_text(chunk, translator='bing', from_language='id', to_language='en')
+                
+                translated_chunks.append(res)
+                success = True
+                break
+            except Exception as e:
+                print(f"    -> Error Bing: {e} | Menunggu {wait_time} detik... (Percobaan {attempt+1}/{max_retries})")
+                time.sleep(wait_time)
+                wait_time *= 2 
+
+        if not success:
+            return None
+
+    return " ".join(translated_chunks)
+
+stop_translation = False
+batch_size = 50 # Auto-save setiap kelipatan 50 kalimat
+
+# Looping ke seluruh kalimat unik
+for i, element in enumerate(unique_elements):
+    text_strip = str(element).strip()
+
+    if not text_strip:
+        translations[element] = ""
+        continue
+
+    # [FITUR BARU] Skip (lewati) kalimat jika sudah ada di file JSON
+    if element in translations:
+        continue
+
+    # Indikator progres
+    if i % 10 == 0 or i == len(unique_elements) - 1:
+        print(f"Menerjemahkan baris unik ke-{i} dari {len(unique_elements)}...")
+
+    result = safe_translate(text_strip)
+
+    if result is None:
+        print("\n[PERINGATAN] API Google memblokir IP Anda secara total!")
+        print(f"Proses dihentikan paksa pada baris ke-{i} agar dataset tidak rusak/campuran.")
+        stop_translation = True
+        break
+    else:
+        translations[element] = result
+
+    # [FITUR BARU] Auto-save setiap 50 kalimat baru berhasil diterjemahkan
+    if len(translations) % batch_size == 0:
+        with open(checkpoint_file, 'w', encoding='utf-8') as f:
+            json.dump(translations, f, ensure_ascii=False, indent=4)
+        print(f"    [Auto-Save] {len(translations)} progres terjemahan aman tersimpan.")
+
+# Simpan sisa terakhir ketika looping selesai atau terhenti
+with open(checkpoint_file, 'w', encoding='utf-8') as f:
+    json.dump(translations, f, ensure_ascii=False, indent=4)
+
+# =========================================================================
+# 4. LAPIS 2: POST-TRANSLATE & MAPPING (Hanya dieksekusi jika semua selesai)
+# =========================================================================
+
+# Jika proses terhenti karena Rate Limit, kita tahan dulu eksekusi DataFrame-nya
+if stop_translation:
+    print("\n===========================================================")
+    print("TINDAKAN YANG HARUS ANDA LAKUKAN SEKARANG:")
+    print("1. Jangan panik, progres Anda sudah aman di file 'checkpoint_terjemahan.json'.")
+    print("2. Ganti jaringan internet Anda (misal: gunakan hotspot HP / restart Router).")
+    print("3. Run (jalankan) ulang cell kode ini dari awal.")
+    print("4. Kode akan otomatis melanjutkan dari titik terakhir yang belum diterjemahkan.")
+    print("===========================================================")
+else:
+    # Memetakan hasil kembali ke DataFrame utama
+    df['translated_text'] = df_normalisasi['normalisasi_fixed'].map(translations)
+
+    def post_translate_cleaning(text):
+        if not isinstance(text, str):
+            return ""
+        
+        # Paksa ubah residu kata Indonesia spesifik topik
+        text = re.sub(r'\bdosen\b', 'lecturer', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bgaji\b', 'salary', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bahli\b', 'expert', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bbayar\b', 'salary', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bdpr\b', 'government', text, flags=re.IGNORECASE)
+
+        # Pembersihan karakter aneh dan link
+        text = re.sub(r'([^0-9A-Za-z \t])|(\w+:\/\/\S+)', ' ', text)
+        text = text.lower()
+
+        # Hapus artefak huruf 's' tunggal sisa apostrof 
+        text = re.sub(r'\b s \b', ' ', text)
+
+        # Menghilangkan spasi ganda
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    # Menerapkan Lapis 2
+    df['translated_text'] = df['translated_text'].apply(post_translate_cleaning)
+
+    print("\n✓ SELAMAT! Tahap Translation 100% Berhasil Diselesaikan Secara Menyeluruh!")
+
+    # Menampilkan hasil akhir
+    df_display = pd.DataFrame(df[['text', 'cleaning', 'case_folding', 'normalisasi', 'translated_text']])
+    display(df_display.head(10))

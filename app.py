@@ -3,7 +3,9 @@ import joblib
 from gensim.models import LdaModel
 from gensim.corpora import Dictionary
 from deep_translator import GoogleTranslator, MyMemoryTranslator
+import translators as ts # [BARU] Import library translators untuk mesin Bing
 import time
+import random
 import numpy as np
 import pandas as pd
 import requests
@@ -11,18 +13,35 @@ from io import BytesIO
 import re
 import plotly.express as px
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer # [BARU] Import Lemmatizer
+import json
+import os
 
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Analisis Dosen", layout="centered", initial_sidebar_state="collapsed")
+
+@st.cache_data
+def load_checkpoint_terjemahan():
+    file_path = 'checkpoint_terjemahan.json'
+    # Cek apakah file json ada di folder yang sama (saat di GitHub nanti)
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+# Panggil fungsinya agar kamus langsung tersimpan di memori web
+kamus_checkpoint = load_checkpoint_terjemahan()
 
 # =========================================================================
 # 2. LOAD MODEL & RESOURCES
 # =========================================================================
 @st.cache_resource(ttl=600)
 def load_resources():
-    svm_model = joblib.load('svm_model.pkl')
+    svm_model = joblib.load('svm_model_tuned.pkl') # Sesuaikan jika nama file Anda berbeda
     tfidf_vectorizer = joblib.load('tfidf_vectorizer.pkl')
-    # Pastikan lda_model dan dict yang diload adalah versi yang baru (V2)
+    # Pastikan lda_model dan dict yang diload adalah versi yang baru (V2/V3)
     lda_model = LdaModel.load('lda_model.model') 
     lda_dict = Dictionary.load('lda_dictionary.dict')
 
@@ -39,7 +58,7 @@ def load_resources():
 svm_model, tfidf_vectorizer, lda_model, lda_dict, kamus_tidak_baku = load_resources()
 
 # =========================================================================
-# 3. DAFTAR STOPWORDS KHUSUS LDA (Berdasarkan Notebook)
+# 3. DAFTAR STOPWORDS KHUSUS LDA & SETUP NLTK
 # =========================================================================
 custom_stopwords_lda = {
     'no', 'not', 'noy', 
@@ -47,6 +66,14 @@ custom_stopwords_lda = {
     'mrs', 'oh', 'regarding', 'considered', 'indeed', 'etc',
     'wow', 'yesterday', 'especially', 'looking', 'called', 'big', 'high'
 }
+
+# Download Resource NLTK
+nltk.download('stopwords', quiet=True)
+nltk.download('wordnet', quiet=True)   # [BARU] Kamus Lemmatization
+nltk.download('omw-1.4', quiet=True)   # [BARU] Ekstensi kamus
+
+# Inisialisasi Lemmatizer
+lemmatizer = WordNetLemmatizer()
 
 # --- FUNGSI PREPROCESSING DASAR ---
 def clean_text(text):
@@ -93,6 +120,57 @@ def pre_translate_normalization(text):
     text = re.sub(r'\bsd\b', 'institution', text, flags=re.IGNORECASE)
     return text
 
+# [DIPERBARUI] FUNGSI TRANSLATE 3 LAPIS (Google -> MyMemory -> Bing)
+# Tambahkan parameter "is_batch" agar notifikasi tidak spam saat file Excel diproses
+def terjemahkan_aman(text, is_batch=False):
+    if not isinstance(text, str) or not text.strip(): 
+        return ""
+    
+    # Membuat cuplikan teks pendek (30 huruf) agar terminal Anda tetap rapi
+    text_preview = text[:30] + "..." if len(text) > 30 else text
+    
+    if is_batch:
+        time.sleep(random.uniform(4.5, 6.5)) 
+    else:
+        time.sleep(0.5)
+        
+    try:
+        # Percobaan 1: Google
+        hasil = GoogleTranslator(source='id', target='en').translate(text)
+        if is_batch: 
+            print(f"✅ [GOOGLE] Berhasil -> {text_preview}")
+        return hasil
+        
+    except Exception as e_google:
+        if not is_batch: st.toast("⚠️ Google limit. Beralih ke MyMemory...", icon="🔄")
+        print(f"⚠️ [GOOGLE LIMIT] {text_preview} | Beralih ke MyMemory...")
+        
+        try:
+            if is_batch: time.sleep(random.uniform(3.5, 7.0))
+            # Percobaan 2: MyMemory
+            hasil = MyMemoryTranslator(source='id-ID', target='en-US', email='muhajirkelana48@gmail.com').translate(text)
+            if is_batch: 
+                print(f"✅ [MYMEMORY] Berhasil -> {text_preview}")
+            return hasil
+            
+        except Exception as e_mymemory:
+            if not is_batch: st.toast("⚠️ MyMemory limit. Beralih ke Bing...", icon="🔄")
+            print(f"⚠️ [MYMEMORY LIMIT] {text_preview} | Beralih ke Bing...")
+            
+            try:
+                if is_batch: time.sleep(random.uniform(5.0, 8.0))
+                # Percobaan 3: Bing
+                hasil = ts.translate_text(text, translator='bing', from_language='id', to_language='en')
+                if is_batch: 
+                    print(f"✅ [BING] Berhasil -> {text_preview}")
+                return hasil
+                
+            except Exception as e_bing:
+                if not is_batch: st.toast("❌ Semua API lumpuh. Teks asli digunakan.", icon="⚠️")
+                # Jika ketiga-tiganya lumpuh
+                print(f"❌ [ALL FAILED] API Lumpuh! Menggunakan teks asli -> {text_preview}")
+                return text
+
 def post_translate_cleaning(text):
     if not isinstance(text, str): return ""
     text = re.sub(r'\bdosen\b', 'lecturer', text, flags=re.IGNORECASE)
@@ -137,17 +215,9 @@ def apply_synonyms(text, synonym_dict):
     if not isinstance(text, str) or not text.strip(): return ""
     text = re.sub(r'\bcivil servant\b', 'status', text, flags=re.IGNORECASE)
     text = re.sub(r'\bcivil servants\b', 'status', text, flags=re.IGNORECASE)
-    
-    # Hapus synonym untuk 'non asn' di sini jika Anda ingin entitas 'non_asn' tertangkap LDA. 
-    # Namun karena SVM butuh 'status', kita biarkan, TAPI kita akan ubah untuk LDA di fungsi khusus.
-    
     words = text.split()
     replaced = [synonym_dict[w.lower()] if w.lower() in synonym_dict else w for w in words]
     return ' '.join(replaced)
-
-import nltk
-from nltk.corpus import stopwords
-nltk.download('stopwords', quiet=True)
 
 stop_words_id = set(stopwords.words('indonesian'))
 stop_words_en = set(stopwords.words('english'))
@@ -178,29 +248,19 @@ def remove_stopwords(text):
     filtered = [w.lower() for w in words if len(w.lower()) > 1 and not w.lower().isdigit() and w.lower() not in final_blacklist]
     return " ".join(filtered)
 
-def terjemahkan_aman(text):
-    if not isinstance(text, str) or not text.strip(): 
-        return ""
+# [BARU] FUNGSI LEMMATIZATION (Dijalankan setelah stopword removal)
+def apply_lemmatization(text):
+    if not isinstance(text, str): return ""
+    tokens = text.split()
+    lemmatized_tokens = []
+    for word in tokens:
+        # 1. Lemmatize sebagai verb (kata kerja)
+        lemma_verb = lemmatizer.lemmatize(word, pos='v')
+        # 2. Lemmatize sebagai noun (kata benda)
+        lemma_final = lemmatizer.lemmatize(lemma_verb, pos='n')
+        lemmatized_tokens.append(lemma_final)
     
-    try:
-        # Percobaan 1: Google Translator
-        hasil = GoogleTranslator(source='id', target='en').translate(text)
-        time.sleep(0.5)
-        return hasil
-    except Exception as e_google:
-        # Menampilkan notifikasi visual di Streamlit jika Google gagal
-        st.toast("⚠️ Google Translate limit/ditangguhkan. Beralih ke MyMemory...", icon="🔄")
-        
-        try:
-            # Percobaan 2: MyMemory Translator
-            hasil = MyMemoryTranslator(source='id-ID', target='en-US').translate(text)
-            time.sleep(0.5)
-            return hasil
-        except Exception:
-            st.toast("⚠️ kedua library lagi ditangguhkan jadi di balikkan lagi dengan teks asli", icon="🔄")
-            # Jika keduanya gagal
-            return text
-
+    return " ".join(lemmatized_tokens)
 
 # =========================================================================
 # VALIDASI MODEL
@@ -301,21 +361,24 @@ if pilihan_menu == "💬 Analisis Teks":
         if user_input.strip() == "":
             st.warning("⚠️ Masukkan teks aspirasi terlebih dahulu.")
         else:
-            with st.spinner("Memproses teks..."):
+            with st.spinner("Memproses teks melalui NLP Pipeline..."):
                 # Preprocessing Universal
                 step1_clean = clean_text(user_input).lower()
                 step2_normalisasi = normalisasi_baku(step1_clean, kamus_tidak_baku)
                 step3_pretranslate = pre_translate_normalization(step2_normalisasi)
                 
-                translated_raw = terjemahkan_aman(step3_pretranslate)
+                translated_raw = terjemahkan_aman(step3_pretranslate, is_batch=False)
                 
-                # Opsional: Memberi tahu pengguna jika kedua API gagal dan teks dikembalikan ke bentuk asli
+                # Memberi tahu pengguna jika API gagal dan teks dikembalikan ke bentuk asli
                 if translated_raw == step3_pretranslate and step3_pretranslate.strip() != "":
-                    st.warning("⚠️ Server terjemahan sedang penuh. Memproses dengan teks asli, akurasi AI mungkin sedikit menurun.")
+                    st.toast("⚠️ Terjemahan terkendala limit API. Teks diproses asli.", icon="⚠️")
 
                 step4_posttranslate = post_translate_cleaning(translated_raw)
                 step5_synonym = apply_synonyms(step4_posttranslate, synonym_mapping)
-                final_text = remove_stopwords(step5_synonym)
+                step6_stopword = remove_stopwords(step5_synonym)
+                
+                # [BARU] TAHAP LEMMATIZATION
+                final_text = apply_lemmatization(step6_stopword)
 
                 # ==============================================================
                 # PIPELINE SVM (Berjalan Normal)
@@ -348,13 +411,11 @@ if pilihan_menu == "💬 Analisis Teks":
                 # ==============================================================
                 # PIPELINE LDA (Entity Recognition & Custom Stopwords Tambahan)
                 # ==============================================================
-                # Mengganti Entitas secara Manual
                 lda_text = final_text.replace("sri mulyani", "sri_mulyani")
                 lda_text = lda_text.replace("prabowo subianto", "prabowo_subianto")
                 lda_text = lda_text.replace("bpjs ketenagakerjaan", "bpjs_ketenagakerjaan")
                 lda_text = lda_text.replace("non asn", "non_asn")
                 
-                # Menghapus Custom Stopwords Khusus LDA
                 tokens_lda = [w for w in lda_text.split() if w.lower() not in custom_stopwords_lda]
                 
                 bow = lda_dict.doc2bow(tokens_lda)
@@ -399,13 +460,13 @@ if pilihan_menu == "💬 Analisis Teks":
 
             st.markdown("<br>", unsafe_allow_html=True)
             with st.expander("📖 Lihat Detail Proses Analisis Model AI"):
-                st.markdown("**Teks Normalisasi:**")
+                st.markdown("**1. Teks Normalisasi (Baku):**")
                 st.code(step2_normalisasi, language="text")
-                st.markdown("**Teks Terjemahan (Inggris):**")
+                st.markdown("**2. Teks Terjemahan (Inggris):**")
                 st.code(translated_raw, language="text")
-                st.markdown("**Teks SVM (Preprocessed):**")
+                st.markdown("**3. Teks SVM (Lemmatized & Cleaned):**")
                 st.code(final_text, language="text")
-                st.markdown("**Teks LDA (Entity Recognition & Stopwords LDA):**")
+                st.markdown("**4. Teks LDA (Entity Recognition):**")
                 st.code(" ".join(tokens_lda), language="text")
 
 
@@ -466,13 +527,30 @@ elif pilihan_menu == "🪟 Analisis Batch":
                         teks_asli = str(row[kolom_teks])
                         try:
                             # Preprocessing Universal
+                            # Preprocessing Universal
                             step1_clean = clean_text(teks_asli).lower()
                             step2_normalisasi = normalisasi_baku(step1_clean, kamus_tidak_baku)
+                            
+                            # KUNCI PENTING: Variabel ini yang dicocokkan dengan JSON
                             step3_pretranslate = pre_translate_normalization(step2_normalisasi)
-                            translated_raw = terjemahkan_aman(step3_pretranslate)
+                            
+                            # ==============================================================
+                            # SISTEM CACHE (JURUS RAHASIA SIDANG)
+                            # ==============================================================
+                            if step3_pretranslate in kamus_checkpoint:
+                                # Jika kalimat sudah ada di JSON, ambil langsung! (Kecepatan Kilat, Tanpa Limit)
+                                translated_raw = kamus_checkpoint[step3_pretranslate]
+                            else:
+                                # Jika kalimat benar-benar baru, baru panggil API (Pelan dan Aman)
+                                translated_raw = terjemahkan_aman(step3_pretranslate, is_batch=True)
+                            # ==============================================================
+                            
                             step4_posttranslate = post_translate_cleaning(translated_raw)
                             step5_synonym = apply_synonyms(step4_posttranslate, synonym_mapping)
-                            final_text = remove_stopwords(step5_synonym)
+                            step6_stopword = remove_stopwords(step5_synonym)
+                            
+                            # [BARU] TAHAP LEMMATIZATION DITERAPKAN KE BATCH
+                            final_text = apply_lemmatization(step6_stopword)
 
                             # PIPELINE LDA 
                             lda_text = final_text.replace("sri mulyani", "sri_mulyani")
@@ -606,7 +684,7 @@ elif pilihan_menu == "🪟 Analisis Batch":
                         kolom_teks: 'Teks Aspirasi Asli',
                         'Teks_Normalisasi': 'Hasil Normalisasi',
                         'Teks_Translate': 'Hasil Translate',
-                        'Teks_Bersih': 'Teks Bersih (SVM)',
+                        'Teks_Bersih': 'Teks Bersih (SVM/Lemma)',
                         'Teks_LDA_Tokens': 'Teks Bersih (LDA)',
                         'Prediksi_Topik': 'Topik / Aspek (LDA)',
                         'Prediksi_Sentimen': 'Prediksi Sentiment'
