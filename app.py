@@ -271,12 +271,10 @@ if len(model_classes) != 2:
     st.stop()
 
 aspect_names = {
-    0: "Institutional & Educational Actors",
-    1: "Educational Load & Quality",
-    2: "Contract & Non-ASN Status",
-    3: "Budget & Welfare Policy",
-    4: "Employment Status & Legality",
-    5: "Academic Qualification & Social Policy",
+    0: "Teaching Activity & Workload",
+    1: "Welfare Policy & Education Budget",
+    2: "Employment Status & Performance	",
+    3: "Academic Qualification & Research",
 }
 
 
